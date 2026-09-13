@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import statistics
 from typing import Any
 
@@ -65,6 +66,13 @@ def estimate_arv(
                 w *= 1.0 / (1.0 + abs(c["sqft"] - subject_sqft) / subject_sqft * 3)
             if subject_beds and c.get("beds"):
                 w *= 1.0 if abs(c["beds"] - subject_beds) < 0.5 else 0.75
+            cond = str(c.get("condition") or "").lower()
+            if re.search(r"\b(?:poor|dated|fixer|as[\s\-]?is|needs|original|distress(?:ed)?|teardown|rough)\b", cond):
+                w *= 0.5
+                if "Dated / poor-condition comps were down-weighted (ARV should reflect renovated sales)." not in notes:
+                    notes.append("Dated / poor-condition comps were down-weighted (ARV should reflect renovated sales).")
+            elif re.search(r"renov|updated|remodel|new|turnkey|flipped|rehab", cond):
+                w *= 1.15
             ppsf_list.append(ppsf)
             weights.append(w)
             weighted_sum += ppsf * w
@@ -161,6 +169,7 @@ def fetch_rentcast(address: str, api_key: str, sqft: float | None = None, beds: 
             "baths": c.get("bathrooms"),
             "year_built": c.get("yearBuilt"),
             "distance_mi": c.get("distance"),
+            "condition": "",
             "source": "RentCast",
         })
     return {

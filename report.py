@@ -173,18 +173,25 @@ def build_pdf(
         ))
         for n in research.get("notes", []):
             story.append(Paragraph(f"• {n}", small))
-        rows = [[Paragraph(h, cell_b) for h in ["Address", "Status / date", "Price", "Sqft", "$/sqft", "Bd/Ba", "In model"]]]
+        mine = [r for r in research["rows"] if str(r.get("source", "")).lower().startswith("my")]
+        if mine:
+            story.append(Paragraph(f"• {len(mine)} of the comps below come from the preparer's own research (source \"My research\"), with condition noted.", small))
+        tiny = ParagraphStyle("tiny", parent=cell, fontSize=7.8, leading=10)
+        tiny_b = ParagraphStyle("tinyb", parent=tiny, fontName="Helvetica-Bold")
+        rows = [[Paragraph(h, tiny_b) for h in ["Property", "Status / date", "Price", "Sqft", "$/sqft", "Bd/Ba", "Condition", "Source", "Model"]]]
         for r in research["rows"]:
             rows.append([
-                Paragraph(str(r.get("address") or ""), cell),
-                Paragraph(f"{r.get('status','')} {r.get('sold_date','')}".strip(), cell),
-                Paragraph(_money(r.get("price")), cell),
-                Paragraph(f"{r['sqft']:,.0f}", cell),
-                Paragraph(f"${r['ppsf']:,.0f}", cell),
-                Paragraph(f"{_n(r.get('beds'))}/{_n(r.get('baths'))}", cell),
-                Paragraph("✓" if r.get("in_model") else "–", cell),
+                Paragraph(str(r.get("address") or ""), tiny),
+                Paragraph(f"{r.get('status','')} {r.get('sold_date','')}".strip(), tiny),
+                Paragraph(_money(r.get("price")), tiny),
+                Paragraph(f"{r['sqft']:,.0f}", tiny),
+                Paragraph(f"${r['ppsf']:,.0f}", tiny),
+                Paragraph(f"{_n(r.get('beds'))}/{_n(r.get('baths'))}", tiny),
+                Paragraph(str(r.get("condition") or "—"), tiny),
+                Paragraph(str(r.get("source") or ""), tiny),
+                Paragraph("✓" if r.get("in_model") else "–", tiny),
             ])
-        ct = Table(rows, colWidths=[W * 0.34, W * 0.17, W * 0.12, W * 0.09, W * 0.09, W * 0.09, W * 0.10], repeatRows=1)
+        ct = Table(rows, colWidths=[W * 0.25, W * 0.14, W * 0.10, W * 0.07, W * 0.07, W * 0.07, W * 0.13, W * 0.11, W * 0.06], repeatRows=1)
         ct.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), LIGHT), ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
             ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),

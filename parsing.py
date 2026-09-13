@@ -507,9 +507,86 @@ def parse_comps(
             "baths": info["baths"],
             "year_built": info["year_built"],
             "distance_mi": info["distance_mi"],
+            "condition": "",
             "source": "Pasted text",
         })
     return comps
+
+
+# =============================================================================
+# "MY RESEARCH" TABLE PARSER
+# Columns: Property | Sqft | Bed/Bath | Condition | Sold / Final Price Indicator
+# Accepts tab-, pipe-, comma-, or multi-space-separated rows (spreadsheet paste works).
+# =============================================================================
+
+_RESEARCH_HEADER_WORDS = ("property", "address", "sqft", "bed", "condition", "price", "comp")
+
+
+def _split_research_line(line: str) -> list[str]:
+    if "\t" in line:
+        cells = line.split("\t")
+    elif "|" in line:
+        cells = line.split("|")
+    elif re.search(r"\s{2,}", line):
+        cells = re.split(r"\s{2,}", line)
+    else:
+        cells = re.split(r",(?!\s?\d{3}\b)", line)  # commas, but not the thousands separator in $215,000
+    return [c.strip() for c in cells]
+
+
+def _parse_bed_bath(cell: str) -> tuple[float | None, float | None]:
+    m = re.search(r"(\d+(?:\.\d)?)\s*(?:/|-|bd|bed[s]?|br)\s*(\d+(?:\.\d)?)", cell, re.I)
+    if m:
+        return float(m.group(1)), float(m.group(2))
+    return parse_beds(cell), parse_baths(cell)
+
+
+def parse_research_rows(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    # Do NOT run normalize_text here: it collapses tabs, which are the column separators in a spreadsheet paste.
+    text = html_lib.unescape(text).replace(" ", " ").replace("\r", "")
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        cells = _split_research_line(line)
+        if len(cells) < 2:
+            continue
+        first = cells[0].lower()
+        if any(first.startswith(w) for w in _RESEARCH_HEADER_WORDS) and not re.match(r"\d", first):
+            continue  # header row
+        prop = cells[0]
+        sqft = to_number(re.sub(r"[^\d.,]", "", cells[1])) if len(cells) > 1 else None
+        beds, baths = _parse_bed_bath(cells[2]) if len(cells) > 2 else (None, None)
+        condition = cells[3] if len(cells) > 3 else ""
+        price_cell = cells[4] if len(cells) > 4 else " ".join(cells[1:])
+        pm = re.search(r"\$?\s?([\d,]{3,}(?:\.\d+)?\s?[kKmM]?)", price_cell)
+        price = to_number(pm.group(1).replace(" ", "")) if pm else None
+        if price and price < 1000:  # "215k" style without $ handled above; guard against sqft-like numbers
+            price = None
+        status = "Sold"
+        if re.search(r"pending|under contract", price_cell, re.I):
+            status = "Pending"
+        elif re.search(r"active|list(?:ed|ing)?\b|asking|for sale", price_cell, re.I):
+            status = "Active"
+        date_m = re.search(r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", price_cell, re.I)
+        if not (sqft or price):
+            continue
+        rows.append({
+            "use": True,
+            "address": prop,
+            "status": status,
+            "sold_date": date_m.group(1) if date_m else "",
+            "price": price,
+            "sqft": sqft,
+            "beds": beds,
+            "baths": baths,
+            "year_built": None,
+            "distance_mi": None,
+            "condition": condition,
+            "source": "My research",
+        })
+    return rows
 
 
 # =============================================================================

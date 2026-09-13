@@ -11,6 +11,7 @@ storage.py (CSV tracker), report.py (PDF).
 from __future__ import annotations
 
 import html as html_lib
+import json
 from datetime import datetime
 from typing import Any
 
@@ -23,6 +24,7 @@ from parsing import (
     address_from_url,
     parse_comps,
     parse_listing_text,
+    parse_research_rows,
     parse_zip,
     scrape_url,
     to_number,
@@ -241,6 +243,7 @@ def build_tracker_row(s: dict[str, Any], m: dict[str, Any], flags: list[str], cl
         "Max Offer (70%)": _r(m["max_offer_70"]), "Max Offer (65%)": _r(m["max_offer_65"]),
         "Est. Total Profit": _r(m["profit"]), "Est. ROI %": _r(m["roi"], 2),
         "Red Flags": "; ".join(flags), "Agent Claims (Unverified)": "; ".join(claims), "Notes": s["notes"],
+        "Comps JSON": json.dumps(s.get("comps") or [], default=str) if s.get("comps") else "",
     }
 
 
@@ -272,6 +275,11 @@ def row_to_state(row: dict[str, Any]) -> None:
     ss["keyword_flags"] = [f.split('"')[1] for f in flags if f.startswith("Listing says")]
     ss["agent_claims"] = [c for c in txt("Agent Claims (Unverified)").split("; ") if c]
     ss["avms"], ss["comps"], ss["market_context"], ss["rentcast"] = [], [], None, None
+    try:
+        saved = json.loads(txt("Comps JSON") or "[]")
+        ss["comps"] = [c for c in saved if isinstance(c, dict)]
+    except ValueError:
+        pass
     ss["analyzed"], ss["missing"], ss["scrape_msg"] = True, [], None
 
 
@@ -504,9 +512,11 @@ def render_save_export(m: dict[str, Any], flags: list[str], claims: list[str], r
 
 
 def comps_dataframe(comps: list[dict[str, Any]]) -> pd.DataFrame:
-    cols = ["use", "address", "status", "sold_date", "price", "sqft", "beds", "baths", "year_built", "distance_mi", "source"]
+    cols = ["use", "address", "status", "sold_date", "price", "sqft", "beds", "baths", "condition", "year_built", "distance_mi", "source"]
     df = pd.DataFrame(comps, columns=cols) if comps else pd.DataFrame(columns=cols)
     df["use"] = df["use"].fillna(True).astype(bool)
+    for c in ["condition", "source", "sold_date", "status"]:
+        df[c] = df[c].fillna("").astype(str)
     for c in ["price", "sqft", "beds", "baths", "year_built", "distance_mi"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
@@ -519,7 +529,39 @@ def render_arv_tab() -> dict[str, Any]:
     st.markdown(f'<div class="evidence"><b>Subject:</b> {html_lib.escape(subj)} <span class="muted">· {html_lib.escape(subj_facts)}</span></div>', unsafe_allow_html=True)
 
     section("A", "Comparable sales", "Evidence for the ARV. Sold comps within ±35% of the subject's sqft drive the model.")
-    with st.expander("➕ Add comps from pasted text", expanded=not ss["comps"]):
+    with st.expander("📝 Paste my own research  ·  Property | Sqft | Bed/Bath | Condition | Sold / Final Price", expanded=not ss["comps"]):
+        st.caption(
+            "Paste rows straight from your spreadsheet (tab-separated), or type them with commas or pipes. A header row is ignored. "
+            "Each row becomes a comp tagged **My research**, with the condition shown in the model and in the PDF's ARV evidence table. "
+            "Renovated / updated comps get a little more weight; dated or as-is comps get less."
+        )
+        my_text = st.text_area(
+            "My research rows", key="my_research_text", height=150, label_visibility="collapsed",
+            placeholder="Property\tSqft\tBed/Bath\tCondition\tSold / Final Price Indicator\n"
+                        "1210 Maple St\t1,380\t3/2\tRenovated 2025\tSold $298,000 Jun 2026\n"
+                        "1187 Oak Ave\t1,610\t4/2\tUpdated kitchen\tSold $315,500\n"
+                        "940 Elm Ct\t1,320\t3/1.5\tDated, original\tPending $279,900",
+        )
+        r1, r2, _ = st.columns([1.2, 1.2, 4])
+        if r1.button("Add my research to comps", type="primary", width="stretch"):
+            new = parse_research_rows(my_text)
+            usable = [c for c in new if c.get("price") and c.get("sqft")]
+            if not new:
+                st.warning("No rows recognized. Each row needs at least a property name plus sqft and a price.")
+            else:
+                existing = {(c["address"], c.get("price"), c.get("sqft")) for c in ss["comps"]}
+                added = [c for c in new if (c["address"], c.get("price"), c.get("sqft")) not in existing]
+                ss["comps"] = ss["comps"] + added
+                msg = f"Added {len(added)} rows from your research."
+                if len(usable) < len(new):
+                    msg += f" {len(new) - len(usable)} of them lack a price or sqft and will show in the table but not in the model."
+                st.success(msg)
+                st.rerun()
+        if r2.button("Replace comps with my research", width="stretch"):
+            ss["comps"] = parse_research_rows(my_text)
+            st.rerun()
+
+    with st.expander("➕ Add comps from pasted listing text (Zillow / Redfin sold search)", expanded=False):
         st.caption(
             "On Zillow or Redfin, search **Sold** homes near the subject (last 6 months, similar size), select-all, copy, and paste here. "
             "Zillow listing pages also include a 'Recently sold homes' strip — that is extracted automatically when you Analyze."
@@ -582,6 +624,7 @@ def render_arv_tab() -> dict[str, Any]:
                 "sqft": st.column_config.NumberColumn("Sqft", format="%d"),
                 "beds": st.column_config.NumberColumn("Bd", format="%g"),
                 "baths": st.column_config.NumberColumn("Ba", format="%g"),
+                "condition": st.column_config.TextColumn("Condition", width="medium"),
                 "year_built": st.column_config.NumberColumn("Built", format="%d"),
                 "distance_mi": st.column_config.NumberColumn("Dist (mi)", format="%.2f"),
                 "source": st.column_config.TextColumn("Source"),
@@ -603,7 +646,10 @@ def render_arv_tab() -> dict[str, Any]:
         c[2].markdown(metric_card("Optimistic (75th pct)", fmt_money(research["high"]), "neutral", f"${research['p75_ppsf']:,.0f}/sqft"), unsafe_allow_html=True)
         c[3].markdown(metric_card("Confidence", research["confidence"], conf_band, f"{research['n']} comps in model · {research['n_sold']} sold"), unsafe_allow_html=True)
         rows = pd.DataFrame(research["rows"])
-        show = rows[rows["in_model"]][["address", "status", "sold_date", "price", "sqft", "ppsf", "weight"]].copy()
+        for col in ["condition", "source"]:
+            if col not in rows.columns:
+                rows[col] = ""
+        show = rows[rows["in_model"]][["address", "status", "sold_date", "price", "sqft", "ppsf", "condition", "source", "weight"]].copy()
         show["weight"] = (show["weight"] / show["weight"].sum() * 100) if show["weight"].sum() else 0
         st.markdown(
             f'<div class="evidence"><b>How this was calculated.</b> {research["n"]} comps passed the filters (sold status preferred, ±35% of subject sqft). '
@@ -620,6 +666,7 @@ def render_arv_tab() -> dict[str, Any]:
                 "price": st.column_config.NumberColumn("Price", format="$%d"),
                 "sqft": st.column_config.NumberColumn("Sqft", format="%d"),
                 "ppsf": st.column_config.NumberColumn("$/sqft", format="$%.0f"),
+                "condition": "Condition", "source": "Source",
                 "weight": st.column_config.ProgressColumn("Model weight", format="%.0f%%", min_value=0, max_value=100),
             },
         )
@@ -697,6 +744,7 @@ def render_saved_tab() -> None:
         st.caption("Cells are editable inline. Select a row and press Delete (or use the trash icon) to remove it, then click **Save table changes**.")
         edited = st.data_editor(
             view, num_rows="dynamic", width="stretch", hide_index=False,
+            column_order=[c for c in TRACKER_COLUMNS if c != "Comps JSON"],
             column_config={
                 "Est. ROI %": st.column_config.NumberColumn(format="%.1f%%"),
                 **{c: st.column_config.NumberColumn(format="$%d") for c in ["List Price", "Est. ARV", "Est. Rehab Cost", "Purchase Price", "Est. Closing Costs", "Monthly Carrying Cost", "Total Carrying Cost", "Selling Costs (7%)", "Max Offer (70%)", "Max Offer (65%)", "Est. Total Profit"]},

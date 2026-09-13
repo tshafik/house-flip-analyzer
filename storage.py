@@ -44,9 +44,10 @@ TRACKER_COLUMNS = [
     "Red Flags",
     "Agent Claims (Unverified)",
     "Notes",
+    "Comps JSON",  # the comps table serialized, so a saved deal can be reloaded with its ARV evidence
 ]
 
-TEXT_COLUMNS = ["Date Analyzed", "Address", "Listing URL", "Lot Size", "School Ratings", "ARV Comps/Source", "Red Flags", "Agent Claims (Unverified)", "Notes"]
+TEXT_COLUMNS = ["Date Analyzed", "Address", "Listing URL", "Lot Size", "School Ratings", "ARV Comps/Source", "Red Flags", "Agent Claims (Unverified)", "Notes", "Comps JSON"]
 
 
 def load_tracker(path: str = TRACKER_CSV) -> pd.DataFrame:
